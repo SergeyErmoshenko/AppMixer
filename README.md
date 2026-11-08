@@ -5,6 +5,11 @@ menu bar popover, a master volume on top. Every running application is listed
 right away — even before it makes sound — so its volume is always editable; a
 preset level applies from the app's first sound.
 
+Per-app volume goes up to 200% (+6 dB): the boost zone is tinted on the
+slider, and boosted peaks pass a soft-knee limiter instead of hard-clipping.
+The slider is magnetic at 50 / 100 / 150% marks; 100% is special — the app's
+native, untouched audio path (no tap, bit-perfect).
+
 Driverless and crash-safe: built on Core Audio process taps (macOS 14.4+).
 Apps left at 100% are never touched (bit-perfect native playback). If AppMixer
 quits or crashes, every tapped app instantly returns to its native audio path —

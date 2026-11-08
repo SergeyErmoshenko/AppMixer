@@ -19,10 +19,10 @@ final class ProcessTap: @unchecked Sendable {
         try? AudioObjectID.system.write(kAudioHardwarePropertyHogModeIsAllowed, value: UInt32(0))
     }
 
-    /// Slider position, 0.0...1.0. Read by the RT thread every buffer and
-    /// run through `taperedGain` before it reaches the samples — the stored
-    /// value stays linear position so the UI and VolumeStore keep their
-    /// 0...1 semantics.
+    /// Slider position, 0.0...2.0 (200% boost). Read by the RT thread every
+    /// buffer and run through `taperedGain` before it reaches the samples —
+    /// the stored value stays linear position so the UI and VolumeStore keep
+    /// their 0...maxPosition semantics.
     private nonisolated(unsafe) var _volume: Float
     /// Mute flag. Read by the RT thread every buffer.
     private nonisolated(unsafe) var _isMuted: Bool
@@ -65,7 +65,7 @@ final class ProcessTap: @unchecked Sendable {
 
     var volume: Float {
         get { _volume }
-        set { _volume = max(0, min(1, newValue)) }
+        set { _volume = max(0, min(VolumeTaper.maxPosition, newValue)) }
     }
 
     var isMuted: Bool {

@@ -110,3 +110,56 @@ struct BugTapMixChannelTests {
         }
     }
 }
+
+/// Boost (gain > 1) must never hard-clip: peaks bend through the soft
+/// ceiling instead of hitting the DAC's ±1 wall. At or below unity the
+/// render stays bit-exact — no ceiling, no rounding.
+@Suite("boost: soft ceiling above unity")
+struct BoostSoftCeilingTests {
+    @Test("boosted full-scale peaks stay inside ±1 and keep most of their level")
+    func boostedPeakSaturatesSoftly() {
+        let result = mixed(input: [1.0, -1.0], inputChannels: 1, outputChannels: 1, outputCount: 2,
+                           gain: 2, targetGain: 2)
+
+        #expect(result.output[0] > 0.9 && result.output[0] <= 1)
+        #expect(result.output[1] < -0.9 && result.output[1] >= -1)
+    }
+
+    @Test("samples the boost leaves below the knee pass through untouched")
+    func belowKneeBitExact() {
+        // 0.4 × 2 = 0.8 < knee 0.85 — exactly the product, no ceiling.
+        let result = mixed(input: [0.4, -0.4], inputChannels: 1, outputChannels: 1, outputCount: 2,
+                           gain: 2, targetGain: 2)
+
+        #expect(result.output[0] == 0.8)
+        #expect(result.output[1] == -0.8)
+    }
+
+    @Test("at unity the ceiling never engages — attenuation stays bit-exact")
+    func unityIsBitExact() {
+        // Full-scale input at gain 1 must come out as-is: the boost path
+        // (and its ceiling) only exists above unity.
+        let result = mixed(input: [0.9, -0.9], inputChannels: 1, outputChannels: 1, outputCount: 2,
+                           gain: 1, targetGain: 1)
+
+        #expect(result.output[0] == 0.9)
+        #expect(result.output[1] == -0.9)
+    }
+
+    @Test("soft ceiling is monotonic: a louder boosted peak stays louder")
+    func ceilingIsMonotonic() {
+        let knee: Float = 0.85
+        var previous: Float = -1
+        for step in 0 ... 30 {
+            let x = -1 + Float(step) * 2 / 30
+            let shaped = TapMix.softCeiling(x * 2) // boosted ×2
+            #expect(shaped >= -1 && shaped <= 1)
+            #expect(shaped > previous)
+            previous = shaped
+            // Below the knee the ceiling is the identity.
+            if abs(x * 2) <= knee {
+                #expect(shaped == x * 2)
+            }
+        }
+    }
+}

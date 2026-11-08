@@ -66,7 +66,7 @@ final class MixerEngine {
 
     func setVolume(_ value: Float, for app: AudioApp) {
         var entry = volumes[app.bundleID] ?? AppVolume()
-        entry.volume = max(0, min(1, value))
+        entry.volume = max(0, min(VolumeTaper.maxPosition, value))
         apply(entry, to: app)
     }
 

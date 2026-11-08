@@ -25,7 +25,7 @@ struct AppRowView: View {
                 Spacer()
                 Text(entry.isMuted ? "muted" : "\(Int(entry.volume * 100))%")
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(entry.volume > 1 ? Color.orange : Color.secondary)
                     .contentTransition(.numericText())
             }
             .opacity(pausedDim)
@@ -35,6 +35,8 @@ struct AppRowView: View {
                     get: { entry.volume },
                     set: { engine.setVolume($0, for: app) }
                 ),
+                maxValue: VolumeTaper.maxPosition,
+                marks: [0, 0.5, 1, 1.5, 2],
                 icon: sliderIcon(entry),
                 iconDimmed: entry.isMuted,
                 onIconTap: { engine.toggleMute(for: app) }

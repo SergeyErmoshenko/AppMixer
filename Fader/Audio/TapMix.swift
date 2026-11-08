@@ -17,6 +17,19 @@ enum TapMix {
         let ramp: Float
     }
 
+    /// Boost soft ceiling: above the knee the curve bends via tanh toward ±1 —
+    /// slope-continuous at the knee and smoothly saturating, instead of the
+    /// hard clip the DAC would otherwise apply to boosted peaks. Only invoked
+    /// while the frame's gain exceeds unity, so attenuation and unity remain
+    /// bit-exact.
+    static func softCeiling(_ x: Float) -> Float {
+        let knee: Float = 0.85
+        let magnitude = abs(x)
+        guard magnitude > knee else { return x }
+        let overshoot = (magnitude - knee) / (1 - knee)
+        return copysign(knee + (1 - knee) * tanh(overshoot), x)
+    }
+
     /// Applies the ramped gain while adapting the tap's channel layout to the
     /// output stream's. The tap always delivers a stereo mixdown, but the
     /// output can be mono (a Bluetooth headset dropping to HFP mid-call) or
@@ -36,21 +49,25 @@ enum TapMix {
 
         for frame in 0 ..< frames {
             frameGain += (targetGain - frameGain) * ramp
+            let boosting = frameGain > 1.0001
             let inBase = frame * inChannels
             let outBase = frame * outChannels
             if inChannels == outChannels {
                 for channel in 0 ..< outChannels {
-                    output[outBase + channel] = input[inBase + channel] * frameGain
+                    let sample = input[inBase + channel] * frameGain
+                    output[outBase + channel] = boosting ? softCeiling(sample) : sample
                 }
             } else if outChannels == 1 {
                 var sum: Float = 0
                 for channel in 0 ..< inChannels {
                     sum += input[inBase + channel]
                 }
-                output[outBase] = sum / Float(inChannels) * frameGain
+                let sample = sum / Float(inChannels) * frameGain
+                output[outBase] = boosting ? softCeiling(sample) : sample
             } else {
                 for channel in 0 ..< outChannels {
-                    output[outBase + channel] = input[inBase + min(channel, inChannels - 1)] * frameGain
+                    let sample = input[inBase + min(channel, inChannels - 1)] * frameGain
+                    output[outBase + channel] = boosting ? softCeiling(sample) : sample
                 }
             }
         }
