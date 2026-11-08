@@ -13,7 +13,7 @@ extension UserDefaults {
         guard let data = try? JSONEncoder().encode(value) else {
             // Practically unreachable for the stores' plain Codable shapes;
             // don't fail silently.
-            Logger(subsystem: "dev.pantafive.fader", category: "JSONDefaults")
+            Logger(subsystem: "com.ermoshenko.appmixer", category: "JSONDefaults")
                 .error("Failed to encode \(key); not persisted")
             return
         }

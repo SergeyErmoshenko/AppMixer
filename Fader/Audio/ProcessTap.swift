@@ -11,7 +11,7 @@ import os
 /// read lock-free by the real-time HAL IO thread. Aligned Float32/Bool loads and
 /// stores are atomic on Apple silicon, so no locking is needed for these.
 final class ProcessTap: @unchecked Sendable {
-    static let logger = Logger(subsystem: "dev.pantafive.fader", category: "ProcessTap")
+    static let logger = Logger(subsystem: "com.ermoshenko.appmixer", category: "ProcessTap")
     /// Fader never needs exclusive hardware access, and its audio IO must not
     /// keep the CPU awake while the rest of the machine is idle.
     private static func configureHALPowerPolicy() {
@@ -39,7 +39,7 @@ final class ProcessTap: @unchecked Sendable {
     var tapDescription: CATapDescription?
     var idleTask: Task<Void, Never>?
     var isProcessPlaying = true
-    private let ioQueue = DispatchQueue(label: "dev.pantafive.fader.io", qos: .userInitiated)
+    private let ioQueue = DispatchQueue(label: "com.ermoshenko.appmixer.io", qos: .userInitiated)
 
     let processObjectIDs: [AudioObjectID]
     @MainActor var isSuspended = false

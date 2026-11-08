@@ -11,7 +11,7 @@ import os
 @MainActor
 @Observable
 final class SystemVolumeController {
-    private static let logger = Logger(subsystem: "dev.pantafive.fader", category: "SystemVolume")
+    private static let logger = Logger(subsystem: "com.ermoshenko.appmixer", category: "SystemVolume")
 
     let direction: AudioDirection
 

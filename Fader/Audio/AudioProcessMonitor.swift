@@ -9,7 +9,7 @@ import os
 @MainActor
 @Observable
 final class AudioProcessMonitor {
-    private static let logger = Logger(subsystem: "dev.pantafive.fader", category: "AudioProcessMonitor")
+    private static let logger = Logger(subsystem: "com.ermoshenko.appmixer", category: "AudioProcessMonitor")
 
     private(set) var apps: [AudioApp] = []
 
