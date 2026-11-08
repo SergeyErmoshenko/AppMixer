@@ -1,0 +1,7 @@
+--swiftversion 6.0
+--maxwidth 120
+--indent 4
+--stripunusedargs closure-only
+--self remove
+--importgrouping testable-bottom
+--disable wrapMultilineStatementBraces,wrapPropertyBodies,wrapIfStatementBodies,wrapIfExpressionBodies

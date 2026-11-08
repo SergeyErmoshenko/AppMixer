@@ -1,0 +1,5 @@
+# Paragraphs are single long lines (no hard wraps). Inline HTML only for
+# the centered README screenshot — keep the allowlist tight.
+MD013: false
+MD033:
+  allowed_elements: [p, img, picture, source]

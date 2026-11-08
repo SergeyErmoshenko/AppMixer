@@ -1,0 +1,238 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+# Queue concurrent tag pushes; never kill a job mid-sign/notarize.
+concurrency:
+  group: release
+
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      # Pin the toolchain — the image's default Xcode drifts with updates.
+      # Keep in sync with ci.yml; CI must test the SDK releases ship with.
+      DEVELOPER_DIR: /Applications/Xcode_26.4.app
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # An unvalidated tag flows straight into CFBundleVersion and becomes
+      # /releases/latest for every Sparkle client: a pre-release suffix breaks
+      # the version comparator, and an old version would repoint the appcast
+      # at a downgrade — the /latest redirect resolves by publish date, not
+      # semver. Same-version re-runs stay allowed (idempotent heal).
+      - name: Validate release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag $GITHUB_REF_NAME is not vX.Y.Z; refusing to release it" >&2
+            exit 1
+          fi
+          LATEST=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)
+          LATEST=${LATEST#v}
+          if [ -n "$LATEST" ] && [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+            echo "Tag v$VERSION is not above the latest release v$LATEST" >&2
+            exit 1
+          fi
+
+      - name: Install pinned tools
+        run: ./scripts/install-ci-tools.sh
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+        run: |
+          trap 'rm -f "$RUNNER_TEMP/cert.p12"' EXIT
+          KEYCHAIN=$RUNNER_TEMP/build.keychain-db
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychain -d user -s "$KEYCHAIN"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Build signed app
+        env:
+          SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_IDENTITY }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          xcodegen generate
+          xcodebuild -project Fader.xcodeproj -scheme Fader -configuration Release \
+            MARKETING_VERSION="$VERSION" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime" \
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+            -derivedDataPath build build
+
+      # SPM builds Sparkle's nested helpers ad-hoc signed and Xcode re-signs
+      # only the framework's outer layer — notarization rejects the helpers
+      # (no Developer ID, no timestamp). Re-sign inside-out, then the
+      # framework, then the app, whose seal over Frameworks/ went stale the
+      # moment the nested code changed. Validated locally 2026-06-07:
+      # notarytool Accepted with exactly this sequence.
+      - name: Sign Sparkle helpers
+        env:
+          SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_IDENTITY }}
+        run: |
+          APP=build/Build/Products/Release/Fader.app
+          SPARKLE=$APP/Contents/Frameworks/Sparkle.framework
+          for ITEM in "$SPARKLE/Versions/B/XPCServices/Installer.xpc" \
+                      "$SPARKLE/Versions/B/XPCServices/Downloader.xpc" \
+                      "$SPARKLE/Versions/B/Autoupdate" \
+                      "$SPARKLE/Versions/B/Updater.app"; do
+            codesign --force --options runtime --timestamp \
+              --preserve-metadata=entitlements -s "$SIGNING_IDENTITY" "$ITEM"
+          done
+          codesign --force --options runtime --timestamp -s "$SIGNING_IDENTITY" "$SPARKLE"
+          codesign --force --options runtime --timestamp \
+            --entitlements Fader/Resources/Fader.entitlements -s "$SIGNING_IDENTITY" "$APP"
+
+      # DEPLOYMENT_POSTPROCESSING strip is finicky with the plain `build`
+      # action — verify it actually ran and the signature survived before
+      # spending a notarization round-trip. --deep walks into Sparkle's
+      # helpers, exactly the layer the re-sign step exists for.
+      - name: Verify strip and signature
+        run: |
+          # Without pipefail a failed nm reads as 0 symbols and the check
+          # passes vacuously; assert the binary exists for a clear message.
+          set -o pipefail
+          BIN=build/Build/Products/Release/Fader.app/Contents/MacOS/Fader
+          [ -f "$BIN" ] || { echo "App binary missing at $BIN" >&2; exit 1; }
+          DEFINED=$(nm -U "$BIN" | wc -l | tr -d ' ')
+          if [ "$DEFINED" -gt 5 ]; then
+            echo "Binary not stripped: $DEFINED defined symbols" >&2
+            exit 1
+          fi
+          codesign --verify --strict --deep build/Build/Products/Release/Fader.app
+          codesign -d --entitlements - build/Build/Products/Release/Fader.app 2>&1 \
+            | grep -q audio-input || { echo "Entitlements lost in re-sign" >&2; exit 1; }
+
+      - name: Notarize and package
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -o pipefail
+          VERSION=${GITHUB_REF_NAME#v}
+          APP=build/Build/Products/Release/Fader.app
+          mkdir -p dist/dmg
+
+          # The shipped binary is stripped; the dSYM is the only way to
+          # symbolicate user crash logs. Package it first — a missing dSYM
+          # must fail the job before the notarization round-trips are spent.
+          ditto -c -k --keepParent build/Build/Products/Release/Fader.app.dSYM \
+            "dist/Fader-$VERSION-dSYM.zip"
+
+          # One short-lived store-credentials call instead of ps-visible
+          # passwords on each long notarytool --wait invocation.
+          xcrun notarytool store-credentials fader-ci --keychain "$KEYCHAIN" \
+            --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD" --no-validate
+
+          # `submit --wait` exits 0 even when the verdict is Invalid — only
+          # the later staple would fail, confusingly. Assert the verdict
+          # (case-insensitive on purpose: a string miss here would fail
+          # Accepted releases; verify against real output on the next one).
+          notarize() {
+            xcrun notarytool submit "$1" \
+              --keychain "$KEYCHAIN" --keychain-profile fader-ci --wait \
+              | tee "$RUNNER_TEMP/notary.log"
+            grep -qi "accepted" "$RUNNER_TEMP/notary.log"
+          }
+
+          ditto -c -k --keepParent "$APP" dist/Fader.zip
+          notarize dist/Fader.zip
+          xcrun stapler staple "$APP"
+          rm dist/Fader.zip
+
+          cp -R "$APP" dist/dmg/
+          ln -s /Applications dist/dmg/Applications
+          hdiutil create -volname "Fader" -srcfolder dist/dmg -ov -format UDZO "dist/Fader.dmg"
+          notarize "dist/Fader.dmg"
+          xcrun stapler staple "dist/Fader.dmg"
+          cp "dist/Fader.dmg" "dist/Fader-$VERSION.dmg"
+
+      # Must run after stapling — the ticket changes the dmg's bytes, and the
+      # EdDSA signature covers them. The feed URL in Info.plist is the stable
+      # releases/latest/download redirect, so a single-item appcast on each
+      # release is enough; the enclosure points at the immutable versioned dmg.
+      - name: Generate Sparkle appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          ENCLOSURE_ATTRS=$(echo "$SPARKLE_PRIVATE_KEY" | sign_update --ed-key-file - "dist/Fader-$VERSION.dmg")
+          cat > dist/appcast.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Fader</title>
+              <item>
+                <title>$VERSION</title>
+                <link>https://github.com/pantafive/fader/releases/tag/v$VERSION</link>
+                <sparkle:version>$VERSION</sparkle:version>
+                <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+                <enclosure url="https://github.com/pantafive/fader/releases/download/v$VERSION/Fader-$VERSION.dmg" $ENCLOSURE_ATTRS type="application/octet-stream"/>
+              </item>
+            </channel>
+          </rss>
+          EOF
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          # Idempotent: a re-run heals a partial release instead of failing.
+          if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --title "Fader $VERSION" --generate-notes --draft
+          fi
+          gh release upload "$GITHUB_REF_NAME" \
+            "dist/Fader.dmg" "dist/Fader-$VERSION.dmg" "dist/Fader-$VERSION-dSYM.zip" \
+            "dist/appcast.xml" --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+
+      # After undraft only — the cask must never point at an unpublished dmg.
+      # TAP_PUSH_TOKEN: fine-grained PAT, homebrew-tap repo only, Contents
+      # read/write; expires yearly. If this step fails the release is already
+      # live — fix the token and re-run, the no-diff guard makes it safe.
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: pantafive/homebrew-tap
+          token: ${{ secrets.TAP_PUSH_TOKEN }}
+          path: tap
+
+      - name: Bump Homebrew cask
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          SHA256=$(shasum -a 256 "dist/Fader-$VERSION.dmg" | awk '{print $1}')
+          cd tap
+          sed -i '' \
+            -e "s/^  version .*/  version \"$VERSION\"/" \
+            -e "s/^  sha256 .*/  sha256 \"$SHA256\"/" Casks/fader.rb
+          if git diff --quiet; then
+            echo "Cask already at $VERSION"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -am "fader $VERSION"
+          git push

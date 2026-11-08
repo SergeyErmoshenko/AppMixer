@@ -1,0 +1,17 @@
+included:
+  - Fader
+  - Tests
+
+line_length: 120
+
+disabled_rules:
+  - todo
+  - identifier_name # single-letter loop vars and HAL-style names are fine
+  - trailing_comma # SwiftFormat owns comma style; Swift 6.1 allows trailing commas
+  - inclusive_language # flags audio-domain terms like master volume
+
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - contains_over_first_not_nil
+  - redundant_nil_coalescing
