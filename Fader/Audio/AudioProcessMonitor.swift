@@ -3,9 +3,12 @@ import CoreAudio
 import Observation
 import os
 
-/// Watches the HAL's audio process list and publishes the running apps
-/// that can play sound. Helper processes (browser media children, Electron
-/// renderers) group under their responsible application.
+/// Publishes every running regular application, merging two sources:
+/// the HAL's audio process list (apps that Core Audio knows about — they
+/// made sound) and NSWorkspace (all GUI apps). Helper processes (browser
+/// media children, Electron renderers) group under their responsible
+/// application. Apps that never made sound keep a row too, so a volume can
+/// be set ahead of time and applies from the app's first sound.
 @MainActor
 @Observable
 final class AudioProcessMonitor {
@@ -16,10 +19,14 @@ final class AudioProcessMonitor {
     @ObservationIgnored private var listListener: HALListener?
     @ObservationIgnored private var pendingRefresh: Task<Void, Never>?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    /// Written only on the main actor; deinit reads it nonisolated, hence
+    /// `nonisolated(unsafe)` — the same escape hatch ProcessTap uses.
+    @ObservationIgnored nonisolated(unsafe) private var workspaceObservers: [NSObjectProtocol] = []
 
     func start() {
         guard pollTask == nil else { return } // idempotent: a second call must not double-listen
         installListListener()
+        installWorkspaceObservers()
         // Per-process IsRunningOutput flips do NOT arrive in practice
         // (observed on macOS 26), so the playing state is polled. Reading the
         // flags of a few dozen process objects costs microseconds.
@@ -53,12 +60,29 @@ final class AudioProcessMonitor {
     deinit {
         pollTask?.cancel()
         pendingRefresh?.cancel()
+        for observer in workspaceObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
     }
 
     private func installListListener() {
         // List changes (process appeared / exited) arrive as HAL notifications.
         listListener = AudioObjectID.system.listen(kAudioHardwarePropertyProcessObjectList) {
             Task { @MainActor [weak self] in self?.scheduleRefresh() }
+        }
+    }
+
+    /// Plain app launch/quit never touches the HAL list, so the workspace
+    /// notifications drive those rows — a launched app becomes adjustable at
+    /// once instead of waiting for the next poll tick.
+    private func installWorkspaceObservers() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification,
+                     NSWorkspace.didTerminateApplicationNotification] {
+            workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) {
+                [weak self] _ in
+                Task { @MainActor [weak self] in self?.scheduleRefresh() }
+            })
         }
     }
 
@@ -107,6 +131,18 @@ final class AudioProcessMonitor {
             groups[key] = group
         }
 
+        // Every regular GUI app stays listed even before it makes sound, so
+        // its slider can be set ahead of time. Apps already grouped above
+        // (they own HAL processes) keep their richer state.
+        for running in NSWorkspace.shared.runningApplications {
+            guard running.activationPolicy == .regular,
+                  let bundleID = running.bundleIdentifier,
+                  bundleID != Bundle.main.bundleIdentifier,
+                  groups[running.processIdentifier] == nil
+            else { continue }
+            groups[running.processIdentifier] = Group(app: running)
+        }
+
         var nextApps = groups.compactMap { pid, group -> AudioApp? in
             // Regular apps always; agents and helpers only while they actually
             // play or record — keeps Control Center, Siri, and GPU helpers out
@@ -124,9 +160,11 @@ final class AudioProcessMonitor {
         }
         nextApps = AudioApp.coalescedByBundleID(nextApps)
 
-        // Playing apps first, then alphabetical; stable for equal keys.
+        // Playing apps first, then apps known to Core Audio (audio-capable),
+        // then the rest — alphabetical within each tier; stable for equal keys.
         nextApps.sort {
             if $0.isPlaying != $1.isPlaying { return $0.isPlaying }
+            if $0.objectIDs.isEmpty != $1.objectIDs.isEmpty { return !$0.objectIDs.isEmpty }
             return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
 

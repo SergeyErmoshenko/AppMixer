@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The menu bar popover, Windows-mixer style: the master (system) volume on
-/// top, then one row per app. An app appears the first time it makes sound
-/// and keeps its row until it quits — like the Windows volume mixer.
+/// top, then one row per running application. Every regular app is listed
+/// whether or not it has made sound yet, so its volume is always editable.
 struct MixerView: View {
     @Environment(MixerEngine.self) private var engine
 
@@ -70,12 +70,10 @@ struct MixerView: View {
         }
     }
 
-    /// Apps audible right now, plus apps heard earlier this session or with a
-    /// saved adjustment — hiding those would strand their saved volume.
+    /// Every running application, not just audible ones: a volume can be set
+    /// before the app ever makes sound — it applies from the first sound.
     private var mixerApps: [AudioApp] {
-        engine.processMonitor.apps.filter {
-            $0.isPlaying || !engine.volume(for: $0).isNeutral || engine.hasPlayedThisSession($0)
-        }
+        engine.processMonitor.apps
     }
 
     @ViewBuilder

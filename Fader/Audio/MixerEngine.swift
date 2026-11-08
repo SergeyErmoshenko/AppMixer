@@ -167,7 +167,9 @@ final class MixerEngine {
             tap.volume = entry.volume
             tap.isMuted = entry.isMuted
             scheduleNeutralTeardown(for: app.bundleID)
-        } else if !entry.isNeutral {
+        } else if !entry.isNeutral, !app.objectIDs.isEmpty {
+            // No audio processes yet (silent since launch): the stored volume
+            // is picked up by syncTaps() when the app first makes sound.
             installTap(for: app, entry: entry)
         }
     }
@@ -223,7 +225,9 @@ final class MixerEngine {
             }
         }
         for (bundleID, entry) in volumes where !entry.isNeutral {
-            guard taps[bundleID] == nil, let app = running[bundleID] else { continue }
+            // objectIDs empty = the app runs but has no Core Audio processes
+            // yet; its saved volume applies when sound first appears.
+            guard taps[bundleID] == nil, let app = running[bundleID], !app.objectIDs.isEmpty else { continue }
             installTap(for: app, entry: entry)
         }
     }
