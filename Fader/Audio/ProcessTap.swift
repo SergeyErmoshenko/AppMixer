@@ -133,6 +133,7 @@ final class ProcessTap: @unchecked Sendable {
         aggregateID = aggregate
 
         guard verifyStreamFormat() else {
+            Diag.log("aggregate format not attenuable (tap #\(processObjectIDs.first ?? 0)), holding silent")
             holdSilent()
             return
         }

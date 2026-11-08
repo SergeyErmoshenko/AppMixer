@@ -173,6 +173,7 @@ final class AudioProcessMonitor {
             let names = nextApps.map { "\($0.name)\($0.isPlaying ? "*" : "")" }.joined(separator: ", ")
             // App names stay redacted in the unified log (default .private).
             Self.logger.info("Apps: \(nextApps.count)/\(objectIDs.count) HAL processes — \(names)")
+            Diag.log("apps \(nextApps.count)/\(objectIDs.count): \(names)")
         }
     }
 

@@ -15,6 +15,7 @@ extension MixerEngine {
         } catch {
             guard old == nil, tap.tapID.isValid else { throw error }
             ProcessTap.logger.error("Tap activation failed; holding output silent: \(error.localizedDescription)")
+            Diag.log("tap activate-failed \(app.bundleID), holding silent: \(error.localizedDescription)")
             tap.holdSilent()
         }
         if tap.isHeld, old != nil {

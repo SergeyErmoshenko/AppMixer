@@ -219,6 +219,7 @@ final class MixerEngine {
             // A browser that spawns a new media child needs the tap rebuilt —
             // the old one keeps muting only the processes it was born with.
             if tap.processObjectIDs != app.objectIDs || rebuildPending.contains(bundleID) {
+                Diag.log("tap rebuild \(bundleID): [\(tap.processObjectIDs.map(String.init).joined(separator: ","))] -> [\(app.objectIDs.map(String.init).joined(separator: ","))] pending=\(rebuildPending.contains(bundleID))")
                 installTap(for: app, entry: entry)
             } else {
                 tap.updatePlaybackState(isPlaying: app.isPlaying)
@@ -240,6 +241,7 @@ final class MixerEngine {
         do {
             let tap = try makeTap(for: app, entry: entry, replacing: old)
             taps[bundleID] = tap
+            Diag.log("tap ok \(bundleID) procs=\(app.objectIDs.count) vol=\(entry.volume) muted=\(entry.isMuted) held=\(tap.isHeld)")
             if tap.isHeld {
                 rebuildPending.insert(bundleID)
                 scheduleTapRetry()
@@ -251,7 +253,9 @@ final class MixerEngine {
             if let old { retire(old) }
         } catch {
             Self.logger.error("Tap failed for \(bundleID): \(error.localizedDescription)")
+            Diag.log("tap FAIL \(bundleID): \(error.localizedDescription)")
             if let halError = error as? HALError, halError.isPermissionDenied {
+                Diag.log("tap permission-denied \(bundleID) — enable System Audio Recording for AppMixer")
                 needsAudioCapturePermission = true
                 if old == nil { return }
             }
