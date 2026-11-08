@@ -17,13 +17,6 @@ final class AudioProcessMonitor {
     @ObservationIgnored private var pendingRefresh: Task<Void, Never>?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
 
-    #if RENDER_SHOTS
-        /// Render harness only: publish a demo app list without any HAL contact.
-        func seedForRender(apps: [AudioApp]) {
-            self.apps = apps
-        }
-    #endif
-
     func start() {
         guard pollTask == nil else { return } // idempotent: a second call must not double-listen
         installListListener()

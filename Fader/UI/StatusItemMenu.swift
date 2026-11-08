@@ -8,11 +8,6 @@ import ServiceManagement
 @MainActor
 final class StatusItemMenuController: NSObject {
     private var monitor: Any?
-    private let updater: UpdateController
-
-    init(updater: UpdateController) {
-        self.updater = updater
-    }
 
     func install() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { [weak self] event in
@@ -37,7 +32,7 @@ final class StatusItemMenuController: NSObject {
         // inherits that and ignores the system theme.
         menu.appearance = NSApp.effectiveAppearance
 
-        let header = NSMenuItem(title: "Fader \(Bundle.main.shortVersion)", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: "AppMixer \(Bundle.main.shortVersion)", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
@@ -47,46 +42,15 @@ final class StatusItemMenuController: NSObject {
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
 
-        let outputIcon = NSMenuItem(
-            title: "Show Output Device in Menu Bar",
-            action: #selector(toggleOutputIcon),
-            keyEquivalent: ""
-        )
-        outputIcon.target = self
-        outputIcon.state = UserDefaults.standard.bool(forKey: MenuBarLabel.showsOutputIconKey) ? .on : .off
-        menu.addItem(outputIcon)
+        menu.addItem(.separator())
+
+        let credits = NSMenuItem(title: "Original project: fader", action: #selector(visitOriginal), keyEquivalent: "")
+        credits.target = self
+        menu.addItem(credits)
 
         menu.addItem(.separator())
 
-        let checkTitle = updater.stagedVersion.map { "Restart to Update to \($0)" }
-            ?? updater.availableVersion.map { "Update to \($0)…" }
-            ?? "Check for Updates…"
-        let check = NSMenuItem(title: checkTitle, action: #selector(checkForUpdates), keyEquivalent: "")
-        check.target = self
-        menu.addItem(check)
-
-        let autoUpdate = NSMenuItem(
-            title: "Update Automatically",
-            action: #selector(toggleAutoUpdate),
-            keyEquivalent: ""
-        )
-        autoUpdate.target = self
-        autoUpdate.state = updater.automaticallyUpdates ? .on : .off
-        menu.addItem(autoUpdate)
-
-        menu.addItem(.separator())
-
-        let site = NSMenuItem(title: "Visit Website", action: #selector(visitWebsite), keyEquivalent: "")
-        site.target = self
-        menu.addItem(site)
-
-        let bug = NSMenuItem(title: "Report a Bug…", action: #selector(reportBug), keyEquivalent: "")
-        bug.target = self
-        menu.addItem(bug)
-
-        menu.addItem(.separator())
-
-        let quit = NSMenuItem(title: "Quit Fader", action: #selector(quit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit AppMixer", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
 
@@ -105,27 +69,8 @@ final class StatusItemMenuController: NSObject {
         }
     }
 
-    @objc private func toggleOutputIcon() {
-        let defaults = UserDefaults.standard
-        defaults.set(!defaults.bool(forKey: MenuBarLabel.showsOutputIconKey), forKey: MenuBarLabel.showsOutputIconKey)
-    }
-
-    @objc private func checkForUpdates() {
-        updater.checkForUpdates()
-    }
-
-    @objc private func toggleAutoUpdate() {
-        updater.automaticallyUpdates.toggle()
-    }
-
-    @objc private func visitWebsite() {
-        if let url = URL(string: "https://fader.pantafive.dev") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    @objc private func reportBug() {
-        if let url = URL(string: "https://github.com/pantafive/fader/issues/new") {
+    @objc private func visitOriginal() {
+        if let url = URL(string: "https://github.com/pantafive/fader") {
             NSWorkspace.shared.open(url)
         }
     }

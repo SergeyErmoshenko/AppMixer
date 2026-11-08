@@ -30,18 +30,6 @@ final class SystemVolumeController {
         endpoint = VolumeEndpoint(deviceID: .unknown, scope: direction.scope)
     }
 
-    #if RENDER_SHOTS
-        /// Render harness only: publish slider state without a HAL device.
-        func seedForRender(volume: Float, isMuted: Bool, deviceName: String,
-                           canSetVolume: Bool = true, canMute: Bool = true) {
-            self.volume = volume
-            self.isMuted = isMuted
-            self.deviceName = deviceName
-            self.canSetVolume = canSetVolume
-            self.canMute = canMute
-        }
-    #endif
-
     func start() {
         installDefaultDeviceListener()
         attachToDefaultDevice()
@@ -114,5 +102,50 @@ final class SystemVolumeController {
         if let muted = endpoint.readMute() {
             isMuted = muted
         }
+    }
+}
+
+/// The default device's VirtualMainVolume and mute in one scope — the HAL
+/// read/write bodies behind the master volume slider. Lifecycle (listeners,
+/// capability probes, device attachment) stays with the owner above.
+@MainActor
+struct VolumeEndpoint {
+    var deviceID: AudioObjectID
+    let scope: AudioObjectPropertyScope
+
+    /// Clamps and writes; returns the value to publish, nil when the HAL
+    /// write failed and the owner should re-read instead.
+    func writeVolume(_ value: Float) -> Float? {
+        let clamped = max(0, min(1, value))
+        do {
+            try deviceID.write(kAudioHardwareServiceDeviceProperty_VirtualMainVolume, scope: scope, value: clamped)
+            return clamped
+        } catch {
+            return nil
+        }
+    }
+
+    /// Writes the mute flag; returns the state to publish, nil on failure.
+    func writeMute(_ muted: Bool) -> Bool? {
+        do {
+            try deviceID.write(kAudioDevicePropertyMute, scope: scope, value: UInt32(muted ? 1 : 0))
+            return muted
+        } catch {
+            return nil
+        }
+    }
+
+    func readVolume() -> Float? {
+        var value: Float32 = 1.0
+        guard (try? deviceID.read(kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+                                  scope: scope,
+                                  into: &value)) != nil else { return nil }
+        return value
+    }
+
+    func readMute() -> Bool? {
+        var muted: UInt32 = 0
+        guard (try? deviceID.read(kAudioDevicePropertyMute, scope: scope, into: &muted)) != nil else { return nil }
+        return muted != 0
     }
 }

@@ -1,6 +1,6 @@
 import os
 
-private let audioServiceLogger = Logger(subsystem: "dev.pantafive.fader", category: "MixerEngine")
+private let audioServiceLogger = Logger(subsystem: "com.ermoshenko.appmixer", category: "MixerEngine")
 
 extension MixerEngine {
     /// A Core Audio service reset invalidates cached object IDs and every
@@ -13,12 +13,8 @@ extension MixerEngine {
 
         processMonitor.recoverAfterServiceRestart()
         deviceMonitor.recoverAfterServiceRestart()
-        inputDeviceMonitor.recoverAfterServiceRestart()
         systemVolume.recoverAfterServiceRestart()
-        inputVolume.recoverAfterServiceRestart()
-        multiOutput.recoverAfterServiceRestart()
         installHALListeners()
-        bluetooth.refresh()
         syncTaps()
 
         // The reset notification can precede the final device publication.

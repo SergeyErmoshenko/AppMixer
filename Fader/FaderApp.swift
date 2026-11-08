@@ -2,19 +2,11 @@ import AppKit
 import CoreAudio
 import SwiftUI
 
-/// Quit must dissolve an active multi-output: the public aggregate would
-/// otherwise outlive the app and haunt Sound settings as the default.
-/// Exception: relaunching into an update keeps the aggregate alive so the
-/// next instance adopts it and audio never reroutes.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak static var engine: MixerEngine?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        #if RENDER_SHOTS
-            // AppKit is fully up here — safe for ImageRenderer and icon lookups.
-            if RenderHarness.isActive { RenderHarness.runAndExit() }
-        #endif
         // As an LSUIElement agent with no open window, RunningBoard rates the
         // app's termination resistance at its lowest, so under disk pressure
         // the cache-delete daemon evicts it (exit reason 0xBADDD15C) and the
@@ -26,14 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        let isUpdateRelaunch = UpdateController.consumeRelaunchingForUpdate()
-        // Process taps are private to this process and must always be faded and
-        // released. Only the public multi-output aggregate survives an update
-        // relaunch so the incoming instance can adopt it without rerouting.
+        // Process taps are private to this process and must always be faded
+        // and released — releasing restores every app's native audio path.
         Self.engine?.fadeOutAndStop()
-        if !isUpdateRelaunch {
-            Self.engine?.multiOutput.shutdown()
-        }
     }
 }
 
@@ -41,28 +28,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct FaderApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var engine: MixerEngine
-    @State private var updater: UpdateController
     @State private var statusMenu: StatusItemMenuController
 
     init() {
-        #if RENDER_SHOTS
-            // Render mode skips the menu bar, the single-instance guard, and the
-            // HAL probe — applicationDidFinishLaunching shoots the screenshots and
-            // exits before any of that would matter.
-            if RenderHarness.isActive {
-                let updater = UpdateController()
-                _engine = State(initialValue: MixerEngine())
-                _updater = State(initialValue: updater)
-                _statusMenu = State(initialValue: StatusItemMenuController(updater: updater))
-                return
-            }
-        #endif
         Self.yieldToRunningInstance()
         let engine = MixerEngine()
-        let updater = UpdateController()
-        let statusMenu = StatusItemMenuController(updater: updater)
+        let statusMenu = StatusItemMenuController()
         _engine = State(initialValue: engine)
-        _updater = State(initialValue: updater)
         _statusMenu = State(initialValue: statusMenu)
         AppDelegate.engine = engine
         statusMenu.install()
@@ -79,10 +51,10 @@ struct FaderApp: App {
     }
 
     /// A second copy (dev build, stray drag to another folder) must not run
-    /// alongside the first: two engines would fight over process taps and
-    /// the multi-output aggregate. Launch Services already refuses to
-    /// double-launch the same bundle, so reaching this means a copy at a
-    /// different path — name the live one and bow out.
+    /// alongside the first: two engines would fight over process taps.
+    /// Launch Services already refuses to double-launch the same bundle, so
+    /// reaching this means a copy at a different path — name the live one and
+    /// bow out.
     private static func yieldToRunningInstance() {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }
         let myPID = ProcessInfo.processInfo.processIdentifier
@@ -90,7 +62,7 @@ struct FaderApp: App {
             .filter { $0.processIdentifier != myPID }
         guard let other = others.first else { return }
         let alert = NSAlert()
-        alert.messageText = "Fader is already running"
+        alert.messageText = "AppMixer is already running"
         alert.informativeText = "Another copy is running from \(other.bundleURL?.path ?? "another location")."
         NSApp.activate()
         alert.runModal()
@@ -110,9 +82,8 @@ struct FaderApp: App {
         MenuBarExtra {
             MixerView()
                 .environment(engine)
-                .environment(updater)
         } label: {
-            MenuBarLabel(engine: engine, appIcon: Self.menuBarIcon)
+            Image(nsImage: Self.menuBarIcon)
         }
         .menuBarExtraStyle(.window)
     }

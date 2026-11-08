@@ -10,7 +10,7 @@ struct PermissionBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Audio access needed")
                     .font(.system(size: 11, weight: .semibold))
-                Text("Allow Fader to record system audio in Privacy & Security.")
+                Text("Allow AppMixer to record system audio in Privacy & Security.")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             }
