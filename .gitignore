@@ -3,3 +3,4 @@ build/
 colorglyph.json
 .DS_Store
 .tools/
+.signing-secret
