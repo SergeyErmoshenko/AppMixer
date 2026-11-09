@@ -36,6 +36,13 @@ if ! security show-keychain-info "$KC" &>/dev/null; then
 fi
 security unlock-keychain -p "$KC_PASS" "$KC"
 
+# Связка обязана быть в поисковом списке: codesign --keychain ненадёжен,
+# без этого кодсигн отвечает «no identity found».
+if ! security list-keychains | grep -q "$KC"; then
+    echo "→ Добавляю связку в поисковый список…"
+    security list-keychains -s $(security list-keychains | tr -d '"' | tr '\n' ' ') "$KC"
+fi
+
 # 2. Сертификат подписи (один раз). Пароль p12 случайный и живёт одну строку —
 #    security import получает его явно, GUI ничего не спрашивает.
 if ! security find-identity -v -p codesigning "$KC" | grep -q "$IDENTITY"; then
@@ -68,6 +75,13 @@ EOF
     security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KC" >/dev/null
     rm -rf "$WORK"
     echo "✓ Сертификат в связке ${KC:t}."
+fi
+
+# Идентичность должна быть «valid» — иначе codesign её не увидит.
+if ! security find-identity -v -p codesigning "$KC" | grep -q "$IDENTITY"; then
+    echo "✗ Идентичность «$IDENTITY» не валидна, диагностика:"
+    security find-identity -v -p codesigning "$KC" || true
+    exit 1
 fi
 
 # 3. Сборка Release (без Apple-подписи — подпишем сами).
