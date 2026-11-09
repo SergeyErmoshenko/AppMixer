@@ -5,6 +5,10 @@
 # привязывает разрешение на запись системного звука к сертификату и не
 # переспрашивает после пересборок. Связка — отдельная, со случайным паролем
 # (.signing-secret), пароли учётки и старые пароли login-связки не нужны.
+#
+# КРИТИЧНО: p12 собирается СИСТЕМНЫМ openssl (/usr/bin/openssl, LibreSSL).
+# Homebrew OpenSSL 3 экспортирует p12 в формате, который macOS 26 молча
+# не спаривает с ключом («1 identity imported», но 0 valid identities).
 set -euo pipefail
 
 IDENTITY="AppMixer Dev"
@@ -12,6 +16,9 @@ APP="build/Build/Products/Release/AppMixer.app"
 KC="$HOME/Library/Keychains/appmixer-signing.keychain-db"
 SECRET_FILE="$(dirname "$0")/../.signing-secret"
 cd "$(dirname "$0")/.."
+
+OPENSSL="/usr/bin/openssl"
+[[ -x "$OPENSSL" ]] || OPENSSL="$(command -v openssl)"
 
 # 0. Случайный секрет связки (один раз, права 600, в .gitignore).
 if [[ -f "$SECRET_FILE" ]]; then
@@ -36,15 +43,13 @@ if ! security list-keychains | grep -q "$KC"; then
     security list-keychains -s $(security list-keychains | tr -d '"' | tr '\n' ' ') "$KC"
 fi
 
-# Есть ли уже рабочая идентичность в любом из доступных брелоков.
 have_identity() {
-    security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY" \
-        || security find-identity -v 2>/dev/null | grep -q "$IDENTITY"
+    security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"
 }
 
 # 3. Сертификат, если его ещё нет.
 if ! have_identity; then
-    echo "→ Создаю сертификат «$IDENTITY»…"
+    echo "→ Создаю сертификат «$IDENTITY» ($("$OPENSSL" version | head -1))…"
     WORK="$(mktemp -d)"
     cat > "$WORK/openssl.cnf" <<EOF
 [req]
@@ -58,43 +63,27 @@ basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature
 extendedKeyUsage=codeSigning
 EOF
-    openssl req -newkey rsa:2048 -nodes -keyout "$WORK/key.pem" \
+    "$OPENSSL" req -newkey rsa:2048 -nodes -keyout "$WORK/key.pem" \
         -x509 -days 3650 -out "$WORK/cert.pem" -config "$WORK/openssl.cnf" 2>/dev/null
-    # Ключ и сертификат импортируются РАЗДЕЛЬНО: p12-экспорт OpenSSL 3 macOS
-    # порой молча превращает в нерабочую пару («0 valid identities»).
-    security import "$WORK/key.pem"  -k "$KC" -T /usr/bin/codesign 2>/dev/null || true
-    security import "$WORK/cert.pem" -k "$KC" -T /usr/bin/codesign 2>/dev/null || true
-    security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KC" >/dev/null || true
+    P12_PASS="$(openssl rand -hex 16)"
+    "$OPENSSL" pkcs12 -export -in "$WORK/cert.pem" -inkey "$WORK/key.pem" \
+        -out "$WORK/cert.p12" -name "$IDENTITY" -passout pass:"$P12_PASS"
+    security import "$WORK/cert.p12" -k "$KC" -P "$P12_PASS" -T /usr/bin/codesign
+    security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KC" >/dev/null
     rm -rf "$WORK"
 fi
 
-# 4. Если автоимпорт не сработал — надёжный графический путь. Assistant кладёт
-#    сертификат в login-связку, ничего не спрашивает и всегда даёт валидную
-#    идентичность; скрипт сам дождётся и продолжит.
+# 4. Идентичность обязана появиться; иначе — диагностика и стоп.
 if ! have_identity; then
     echo
-    echo "Автоимпорт не дал валидную идентичность. Создадим через встроенный"
-    echo "помощник — это надёжный путь без единого пароля:"
-    echo
-    echo "  1. Откройте «Связка ключей» (Keychain Access)."
-    echo "  2. Меню «Keychain Access» → «Certificate Assistant» → «Create a Certificate»."
-    echo "  3. Name: $IDENTITY   Identity Type: Self-Signed Root."
-    echo "  4. Нажмите «Create» (галку про override НЕ ставьте)."
-    echo
-    echo "Жду идентичность (до 5 минут, проверяю каждые 5 секунд)…"
-    for _ in {1..60}; do
-        have_identity && break
-        sleep 5
-    done
-fi
-
-if ! have_identity; then
-    echo
-    echo "✗ Идентичность «$IDENTITY» не появилась. Диагностика:"
-    echo "--- с политикой codesigning:"
+    echo "✗ Идентичность «$IDENTITY» не сформировалась. Диагностика:"
+    echo "--- identity (политика codesigning):"
     security find-identity -v -p codesigning || true
-    echo "--- без политики:"
+    echo "--- identity (без политики):"
     security find-identity -v || true
+    echo "--- сертификат в связке:"
+    security find-certificate -c "$IDENTITY" "$KC" >/dev/null 2>&1 \
+        && echo "сертификат на месте" || echo "СЕРТИФИКАТА НЕТ"
     exit 1
 fi
 echo "✓ Идентичность «$IDENTITY» готова."
