@@ -13,8 +13,7 @@ set -euo pipefail
 
 APP="build/Build/Products/Release/AppMixer.app"
 SIGN_DIR="$HOME/Library/Application Support/AppMixer/signing"
-CERT="$SIGN_DIR/cert.pem"
-KEY="$SIGN_DIR/key.pem"
+IDENTITY_PEM="$SIGN_DIR/identity.pem"
 cd "$(dirname "$0")/.."
 
 # 0. rcodesign — готовый бинарник с GitHub-релизов (в Homebrew его нет,
@@ -43,20 +42,18 @@ if [[ ! -x "$RCODESIGN" ]]; then
     echo "✓ rcodesign установлен: $BIN_DIR"
 fi
 
-# 1. Сертификат и ключ — генерируются один раз, живут вне репозитория
-#    (переживают удаление папки проекта).
+# 1. Сертификат и ключ — единый PEM, генерируется один раз, живёт вне
+#    репозитория (переживает удаление папки проекта).
 mkdir -p "$SIGN_DIR"
 chmod 700 "$SIGN_DIR"
-if [[ ! -s "$CERT" || ! -s "$KEY" ]]; then
-    echo "→ Генерирую самоподписанный сертификат…"
-    if ! "$RCODESIGN" generate-self-signed-certificate \
-        --certificate-out-path "$CERT" --private-key-out-path "$KEY" \
-        --cn "AppMixer Dev" --valid-days 3650 2>/dev/null; then
-        "$RCODESIGN" generate-self-signed-certificate \
-            --certificate-out-path "$CERT" --private-key-out-path "$KEY"
-    fi
-    chmod 600 "$CERT" "$KEY"
-    echo "✓ Сертификат и ключ: $SIGN_DIR"
+if [[ ! -s "$IDENTITY_PEM" ]]; then
+    echo "→ Генерирую самоподписанный сертификат (10 лет)…"
+    "$RCODESIGN" generate-self-signed-certificate \
+        --person-name "AppMixer Dev" \
+        --validity-days 3650 \
+        --pem-unified-file "$IDENTITY_PEM"
+    chmod 600 "$IDENTITY_PEM"
+    echo "✓ Сертификат и ключ: $IDENTITY_PEM"
 fi
 
 # 2. Сборка Release (без Apple-подписи — подпишем сами).
@@ -67,8 +64,9 @@ xcodebuild -project AppMixer.xcodeproj -scheme AppMixer -configuration Release \
     CODE_SIGNING_ALLOWED=NO -derivedDataPath build build \
     | grep -E "^\*\* BUILD" || true
 
-# 3. Подпись файлами — без связок ключей, без диалогов.
-"$RCODESIGN" sign --pem-source "$CERT" --key-source "$KEY" "$APP"
+# 3. Подпись файлами — без связок ключей, без диалогов; таймстамп-сервер
+#    Apple не нужен, подпись полностью офлайн.
+"$RCODESIGN" sign --pem-file "$IDENTITY_PEM" --timestamp-url none "$APP"
 
 echo "✓ Подписано:"
 codesign -dv "$APP" 2>&1 | grep -E "Identifier=|Signature=|Authority=" || true
