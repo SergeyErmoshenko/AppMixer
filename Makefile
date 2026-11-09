@@ -16,7 +16,7 @@ else
 SIGN_FLAGS := CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=$(SIGN_ID)
 endif
 
-.PHONY: gen build test lint run clean icon menubar-icon
+.PHONY: gen build test lint run install clean icon menubar-icon
 
 gen:
 	xcodegen generate
@@ -34,6 +34,15 @@ lint:
 
 run: build
 	open build/Build/Products/Debug/AppMixer.app
+
+# Build + self-signed release into /Applications. Uses scripts/sign-local.sh
+# (rcodesign, no Apple ID); the audio permission binds to the stable cert.
+install:
+	./scripts/sign-local.sh
+	osascript -e 'quit app "AppMixer"' 2>/dev/null || true
+	rm -rf /Applications/AppMixer.app
+	ditto build/Build/Products/Release/AppMixer.app /Applications/AppMixer.app
+	open /Applications/AppMixer.app
 
 clean:
 	rm -rf build $(XCODEPROJ)

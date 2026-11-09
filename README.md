@@ -32,6 +32,29 @@ open AppMixer.xcodeproj   # select your team, then Run
 Or headless: `make run`. First slider move triggers the macOS system-audio
 permission prompt. Unit tests: `make test`.
 
+## Install as a regular app
+
+No Apple ID needed: `scripts/sign-local.sh` builds a Release bundle,
+generates a self-signed certificate (10 years, kept in
+`~/Library/Application Support/AppMixer/signing/`), and signs the app —
+macOS remembers the system-audio permission permanently.
+
+```sh
+make install
+```
+
+which is equivalent to:
+
+```sh
+./scripts/sign-local.sh    # build + sign, prints install commands
+osascript -e 'quit app "AppMixer"' 2>/dev/null; rm -rf /Applications/AppMixer.app
+ditto build/Build/Products/Release/AppMixer.app /Applications/AppMixer.app
+open /Applications/AppMixer.app
+```
+
+The first launch asks for the system-audio permission once; the signature is
+stable, so it is the last time. Updates are the same `make install`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Based on fader, © pantafive.

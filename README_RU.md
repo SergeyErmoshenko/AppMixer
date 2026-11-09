@@ -32,6 +32,30 @@ open AppMixer.xcodeproj
    бесплатного хватит), галочка Automatically manage signing.
 3. **Cmd+R** (Run).
 
+## Установка как обычное приложение
+
+Без Apple ID и подписки разработчика: скрипт собирает Release, генерирует
+самоподписанный сертификат (10 лет, живёт в
+`~/Library/Application Support/AppMixer/signing/`), подписывает приложение.
+Разрешение на запись системного звука macOS запоминает навсегда.
+
+```sh
+make install
+```
+
+эквивалентно:
+
+```sh
+./scripts/sign-local.sh    # сборка + подпись, печатает команды установки
+osascript -e 'quit app "AppMixer"' 2>/dev/null; rm -rf /Applications/AppMixer.app
+ditto build/Build/Products/Release/AppMixer.app /Applications/AppMixer.app
+open /Applications/AppMixer.app
+```
+
+Первый запуск спросит разрешение на запись системного звука — **Разрешить**
+(один раз: подпись стабильная). Автозапуск — правый клик по иконке в
+меню-баре → **Launch at Login**. Обновление — тот же `make install`.
+
 ## Первый запуск
 
 - Появится иконка в меню-баре. Откройте поповер, запустите музыку/видео в любом
