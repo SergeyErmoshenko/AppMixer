@@ -17,12 +17,28 @@ CERT="$SIGN_DIR/cert.pem"
 KEY="$SIGN_DIR/key.pem"
 cd "$(dirname "$0")/.."
 
-# 0. rcodesign.
-RCODESIGN="$(command -v rcodesign || true)"
-if [[ -z "$RCODESIGN" ]]; then
-    echo "→ Ставлю rcodesign через Homebrew (один раз)…"
-    brew install rcodesign
-    RCODESIGN="$(command -v rcodesign)"
+# 0. rcodesign — готовый бинарник с GitHub-релизов (в Homebrew его нет,
+#    а brew install cosign — это другой инструмент).
+RCODESIGN="$HOME/Library/Application Support/AppMixer/bin/rcodesign"
+if [[ ! -x "$RCODESIGN" ]]; then
+    echo "→ Скачиваю rcodesign (один раз)…"
+    BIN_DIR="$(dirname "$RCODESIGN")"
+    mkdir -p "$BIN_DIR"
+    ASSET_URL=$(curl -s https://api.github.com/repos/indygreg/apple-platform-rs/releases/latest \
+        | grep -Eo '"browser_download_url": *"[^"]*"' \
+        | grep -Ei 'apple_?codesign.*macos' \
+        | grep -Eo 'https[^"]*' | head -1)
+    [[ -n "$ASSET_URL" ]] || { echo "✗ Не нашёл релиз rcodesign на GitHub"; exit 1; }
+    W="$(mktemp -d)"
+    curl -sL -o "$W/dl" "$ASSET_URL"
+    mkdir -p "$W/x"
+    tar -xf "$W/dl" -C "$W/x" 2>/dev/null || unzip -q "$W/dl" -d "$W/x"
+    FOUND="$(find "$W/x" -type f -name rcodesign | head -1)"
+    [[ -n "$FOUND" ]] || { echo "✗ rcodesign не найден в архиве ($ASSET_URL)"; exit 1; }
+    cp "$FOUND" "$RCODESIGN"
+    chmod +x "$RCODESIGN"
+    rm -rf "$W"
+    echo "✓ rcodesign: $BIN_DIR"
 fi
 
 # 1. Сертификат и ключ — генерируются один раз, живут вне репозитория
