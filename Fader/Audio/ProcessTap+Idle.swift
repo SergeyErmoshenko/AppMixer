@@ -4,9 +4,13 @@ import Foundation
 import os
 
 extension ProcessTap {
-    /// Park long-idle IO without letting the process escape at full volume.
-    /// `.muted` keeps native output silent while the aggregate is stopped; one
-    /// shared lightweight watcher resumes IO as soon as the process runs again.
+    /// Park long-idle IO *audibly*: the parked tap switches to `.unmuted`, so
+    /// the process keeps its native output while the aggregate is stopped.
+    /// Parking muted turned out to be a trap — the per-process IsRunningOutput
+    /// flag lies for some apps (Electron helpers), so a muted-parked tap never
+    /// woke and the app sat silent until restart. The unpinned failure mode is
+    /// "plays at 100% uncontrolled", never "silent". One shared lightweight
+    /// watcher resumes IO as soon as the process runs again.
     @MainActor
     func updatePlaybackState(isPlaying: Bool) {
         guard isPlaying != isProcessPlaying else { return }
@@ -21,7 +25,9 @@ extension ProcessTap {
 
         idleTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(for: .seconds(30), tolerance: .seconds(2))
+                // Two minutes, not thirty: pauses between tracks and call
+                // silence are normal playback, not idle.
+                try await Task.sleep(for: .seconds(120), tolerance: .seconds(5))
             } catch {
                 return
             }
@@ -56,7 +62,9 @@ extension ProcessTap {
     private func suspendIO() {
         guard !isSuspended, aggregateID.isValid, let procID else { return }
         do {
-            try setTapMuteBehavior(.muted)
+            // Park native-audible, not muted: see updatePlaybackState. The
+            // parked app plays at 100% until the watcher resumes IO.
+            try setTapMuteBehavior(.unmuted)
             do {
                 try checked(AudioDeviceStop(aggregateID, procID), "suspend aggregate device")
             } catch {
@@ -67,7 +75,7 @@ extension ProcessTap {
             ProcessTapWakeMonitor.shared.watch(self)
             let id = tapID
             Self.logger.debug("Suspended idle tap \(id)")
-            Diag.log("tap suspended \(id) (process idle 30 s)")
+            Diag.log("tap suspended \(id) (idle ≥120 s, parked native-unmuted)")
         } catch {
             Self.logger.error("Failed to suspend idle tap: \(error.localizedDescription)")
         }
