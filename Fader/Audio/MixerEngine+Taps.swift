@@ -45,6 +45,7 @@ extension MixerEngine {
     }
 
     func rebuildBrokenTap(_ bundleID: String) {
+        Diag.log("tap onBroken \(bundleID) — resume failed, replacing")
         rebuildPending.insert(bundleID)
         syncTaps()
     }

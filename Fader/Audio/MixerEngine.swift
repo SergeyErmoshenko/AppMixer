@@ -40,6 +40,10 @@ final class MixerEngine {
     @ObservationIgnored private var neutralTeardownTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored var wakeResyncTask: Task<Void, Never>?
     @ObservationIgnored private var powerMonitor: AudioPowerMonitor?
+    /// Process-set changes must survive two syncs before a tap rebuild —
+    /// short-lived helper processes (notification beeps) flap every few
+    /// seconds, and every rebuild costs a permission prompt.
+    @ObservationIgnored private var setStability: [String: (ids: Set<AudioObjectID>, observations: Int)] = [:]
 
     func start() {
         volumes = store.load()
@@ -116,6 +120,21 @@ final class MixerEngine {
     }
 
     // MARK: - Private
+
+    /// A process-set change only triggers a rebuild once the new set has
+    /// survived three consecutive syncs (~6 s): notification-sound helpers
+    /// live 2–5 s and flapping sets never reach the threshold, while a real
+    /// new process (browser media child) settles and gets captured.
+    private func isStableSetChange(_ bundleID: String, _ ids: [AudioObjectID]) -> Bool {
+        let new = Set(ids)
+        guard let stored = setStability[bundleID], stored.ids == new else {
+            setStability[bundleID] = (new, 0)
+            return false
+        }
+        let observations = stored.observations + 1
+        setStability[bundleID] = (new, observations)
+        return observations >= 3
+    }
 
     func discardHALBoundState() {
         for tap in taps.values {
@@ -218,10 +237,20 @@ final class MixerEngine {
             }
             // A browser that spawns a new media child needs the tap rebuilt —
             // the old one keeps muting only the processes it was born with.
-            if tap.processObjectIDs != app.objectIDs || rebuildPending.contains(bundleID) {
-                Diag.log("tap rebuild \(bundleID): [\(tap.processObjectIDs.map(String.init).joined(separator: ","))] -> [\(app.objectIDs.map(String.init).joined(separator: ","))] pending=\(rebuildPending.contains(bundleID))")
+            // But a broken tap replaces immediately; a mere process-set
+            // change waits for stability (see isStableSetChange).
+            if rebuildPending.contains(bundleID) {
+                Diag.log("tap rebuild \(bundleID): [\(tap.processObjectIDs.map(String.init).joined(separator: ","))] -> [\(app.objectIDs.map(String.init).joined(separator: ","))] pending=true")
+                setStability[bundleID] = nil
                 installTap(for: app, entry: entry)
+            } else if tap.processObjectIDs != app.objectIDs {
+                if isStableSetChange(bundleID, app.objectIDs) {
+                    Diag.log("tap rebuild \(bundleID): [\(tap.processObjectIDs.map(String.init).joined(separator: ","))] -> [\(app.objectIDs.map(String.init).joined(separator: ","))] stable")
+                    setStability[bundleID] = nil
+                    installTap(for: app, entry: entry)
+                }
             } else {
+                setStability[bundleID] = nil
                 tap.updatePlaybackState(isPlaying: app.isPlaying)
             }
         }
@@ -280,8 +309,9 @@ final class MixerEngine {
     func reconcileTapRouting() {
         for (bundleID, tap) in taps {
             guard let entry = volumes[bundleID] else { continue }
-            if let desired = try? resolvedOutputs(for: entry),
-               desired == tap.activatedOutputs, tap.isAlive { continue }
+            let desired = (try? resolvedOutputs(for: entry)) ?? []
+            if desired == tap.activatedOutputs, tap.isAlive, !desired.isEmpty { continue }
+            Diag.log("tap stale \(bundleID): alive=\(tap.isAlive) desired=\(desired.map { "\($0.uid)#\($0.id)" }) activated=\(tap.activatedOutputs.map { "\($0.uid)#\($0.id)" })")
             rebuildPending.insert(bundleID)
         }
         syncTaps()

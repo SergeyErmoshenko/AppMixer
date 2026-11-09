@@ -67,6 +67,7 @@ extension ProcessTap {
             ProcessTapWakeMonitor.shared.watch(self)
             let id = tapID
             Self.logger.debug("Suspended idle tap \(id)")
+            Diag.log("tap suspended \(id) (process idle 30 s)")
         } catch {
             Self.logger.error("Failed to suspend idle tap: \(error.localizedDescription)")
         }
@@ -93,6 +94,7 @@ extension ProcessTap {
             onOutputResumed?()
         } catch {
             Self.logger.error("Failed to resume tap: \(error.localizedDescription)")
+            Diag.log("tap resume FAILED \(tapID): \(error.localizedDescription) — holding silent")
             // Destroying the tap would restore native audio at full volume;
             // stay silent and let MixerEngine build a replacement.
             holdSilent()
