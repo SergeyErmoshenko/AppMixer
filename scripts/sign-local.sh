@@ -56,8 +56,13 @@ extendedKeyUsage=codeSigning
 EOF
     openssl req -newkey rsa:2048 -nodes -keyout "$WORK/key.pem" \
         -x509 -days 3650 -out "$WORK/cert.pem" -config "$WORK/openssl.cnf" 2>/dev/null
+    # macOS security не понимает экспорт OpenSSL 3 по умолчанию (AES-256 +
+    # SHA256 MAC → «MAC verification failed»). 3DES/SHA1 — совместимы.
     openssl pkcs12 -export -in "$WORK/cert.pem" -inkey "$WORK/key.pem" \
-        -out "$WORK/cert.p12" -name "$IDENTITY" -passout pass:"$P12_PASS"
+        -out "$WORK/cert.p12" -name "$IDENTITY" -passout pass:"$P12_PASS" \
+        -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES \
+    || openssl pkcs12 -export -in "$WORK/cert.pem" -inkey "$WORK/key.pem" \
+        -out "$WORK/cert.p12" -name "$IDENTITY" -passout pass:"$P12_PASS" -legacy
     security import "$WORK/cert.p12" -k "$KC" -P "$P12_PASS" -T /usr/bin/codesign
     # Эквивалент «Always Allow» для codesign — заранее, без диалогов.
     security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KC" >/dev/null
