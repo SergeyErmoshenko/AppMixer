@@ -90,10 +90,11 @@ final class MixerEngine {
                 // stale tap unnoticed for hours. This heartbeat re-evaluates
                 // taps even when nothing else changed.
                 self.syncTaps()
+                func age(_ seconds: TimeInterval) -> String {
+                    seconds.isFinite ? "\(Int(seconds.rounded()))s" : "never"
+                }
                 for (bundleID, tap) in self.taps {
-                    let input = Int(tap.secondsSinceInputRender.rounded())
-                    let output = Int(tap.secondsSinceAudibleRender.rounded())
-                    Diag.log("tap health \(bundleID): input=\(input >= 999_999 ? "never" : "\(input)s") output=\(output >= 999_999 ? "never" : "\(output)s") suspended=\(tap.isSuspended) alive=\(tap.isAlive)")
+                    Diag.log("tap health \(bundleID): input=\(age(tap.secondsSinceInputRender)) output=\(age(tap.secondsSinceAudibleRender)) suspended=\(tap.isSuspended) alive=\(tap.isAlive)")
                 }
             }
         }
