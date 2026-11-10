@@ -121,10 +121,13 @@ final class AudioProcessMonitor {
             guard let pid = try? objectID.readProcessPID() else { continue }
 
             // Helper processes answer to the app the user knows; a browser tab's
-            // audio belongs to the browser.
+            // audio belongs to the browser. Helpers that launchd spawned with
+            // no responsibility link (Talk's audio helper, resp == self) are
+            // matched by their executable path living inside an app bundle.
             let ownerPID = Self.responsiblePID(for: pid)
             guard let running = NSRunningApplication(processIdentifier: ownerPID)
-                ?? NSRunningApplication(processIdentifier: pid),
+                ?? NSRunningApplication(processIdentifier: pid)
+                ?? Self.runningAppContainingProcess(pid),
                 let bundleID = running.bundleIdentifier,
                 bundleID != Bundle.main.bundleIdentifier
             else {
@@ -217,6 +220,24 @@ final class AudioProcessMonitor {
         var path = [CChar](repeating: 0, count: 1024)
         guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return "(unknown)" }
         return String(cString: path).split(separator: "/").last.map(String.init) ?? "(unknown)"
+    }
+
+    /// An Electron/Chromium audio helper can run as a launchd agent with no
+    /// responsibility link to its parent app — Kontur Talk's helper answers
+    /// "myself" to the responsibility query, so the usual attribution skips
+    /// it and its audio plays past every slider. But the executable still
+    /// lives inside the owning app's bundle, so match the process path's
+    /// root .app component against running applications' bundle URLs.
+    private static func runningAppContainingProcess(_ pid: pid_t) -> NSRunningApplication? {
+        var buffer = [CChar](repeating: 0, count: 1024)
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        let components = URL(fileURLWithPath: String(cString: buffer)).pathComponents
+        guard let appIndex = components.firstIndex(where: { $0.hasSuffix(".app") }),
+              appIndex > 1 else { return nil }
+        let bundleURL = URL(fileURLWithPath: components[...appIndex].joined(separator: "/"))
+        return NSWorkspace.shared.runningApplications.first {
+            $0.bundleURL == bundleURL && $0.bundleIdentifier != nil
+        }
     }
 
     private static func responsiblePID(for pid: pid_t) -> pid_t {
