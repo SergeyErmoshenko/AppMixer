@@ -85,6 +85,11 @@ final class MixerEngine {
                     break
                 }
                 guard let self else { break }
+                // The mismatch timers only advance inside syncTaps(), which
+                // normally runs on app-list changes — a quiet desktop left a
+                // stale tap unnoticed for hours. This heartbeat re-evaluates
+                // taps even when nothing else changed.
+                self.syncTaps()
                 for (bundleID, tap) in self.taps {
                     let input = Int(tap.secondsSinceInputRender.rounded())
                     let output = Int(tap.secondsSinceAudibleRender.rounded())

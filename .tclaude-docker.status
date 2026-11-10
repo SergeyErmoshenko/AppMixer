@@ -1,0 +1,1 @@
+⚠️ Сокет Colima-профиля agent есть, но демон в VM не отвечает (например, не поднялся после перезапуска). Подождите минуту и проверьте `docker ps`. Если не помогло — вне tclaude: `colima restart agent`; причина — в `colima ssh --profile agent -- sudo journalctl -u docker -n 50`

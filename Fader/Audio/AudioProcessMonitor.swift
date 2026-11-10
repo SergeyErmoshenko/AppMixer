@@ -127,12 +127,13 @@ final class AudioProcessMonitor {
             let ownerPID = Self.responsiblePID(for: pid)
             guard let running = NSRunningApplication(processIdentifier: ownerPID)
                 ?? NSRunningApplication(processIdentifier: pid)
-                ?? Self.runningAppContainingProcess(pid),
+                ?? Self.runningAppContainingProcess(pid)
+                ?? Self.runningAppNamedLikeProcess(pid),
                 let bundleID = running.bundleIdentifier,
                 bundleID != Bundle.main.bundleIdentifier
             else {
                 if objectID.readProcessIsRunningOutput() {
-                    orphans.append("obj=\(objectID) pid=\(pid) resp=\(ownerPID) \(Self.processName(pid))")
+                    orphans.append("obj=\(objectID) pid=\(pid) resp=\(ownerPID) \(Self.processPath(pid))")
                 }
                 continue
             }
@@ -220,6 +221,35 @@ final class AudioProcessMonitor {
         var path = [CChar](repeating: 0, count: 1024)
         guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return "(unknown)" }
         return String(cString: path).split(separator: "/").last.map(String.init) ?? "(unknown)"
+    }
+
+    /// Full executable path of a pid for the orphan X-ray line — where a
+    /// system-installed helper actually lives decides how to attribute it.
+    private static func processPath(_ pid: pid_t) -> String {
+        var path = [CChar](repeating: 0, count: 1024)
+        guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return "(unknown)" }
+        return String(cString: path)
+    }
+
+    /// Last attribution tier: vendor audio helpers installed OUTSIDE any
+    /// .app bundle (Контур Толк's helper answers 'myself' to responsibility
+    /// and lives in a system path), but still named after their app —
+    /// "Толк Helper" ← app "Толк". The required space after the app name
+    /// keeps "Code" from matching "CodeEdit Helper".
+    private static func runningAppNamedLikeProcess(_ pid: pid_t) -> NSRunningApplication? {
+        let name = processName(pid)
+        guard name.count > 4 else { return nil }
+        let apps = NSWorkspace.shared.runningApplications
+        // Longest name wins: "Толк Про" before "Толк".
+        return apps
+            .compactMap { app -> (NSRunningApplication, String)? in
+                guard let appName = app.localizedName, appName.count >= 3,
+                      name.hasPrefix(appName + " ") || name == appName
+                else { return nil }
+                return (app, appName)
+            }
+            .max { $0.1.count < $1.1.count }?
+            .0
     }
 
     /// An Electron/Chromium audio helper can run as a launchd agent with no
