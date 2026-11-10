@@ -207,7 +207,7 @@ final class MixerEngine {
             tap.volume = entry.volume
             tap.isMuted = entry.isMuted
             scheduleNeutralTeardown(for: app.bundleID)
-        } else if !entry.isNeutral, !app.objectIDs.isEmpty {
+        } else if !entry.isNeutral, !app.tapObjectIDs.isEmpty {
             // No audio processes yet (silent since launch): the stored volume
             // is picked up by syncTaps() when the app first makes sound.
             installTap(for: app, entry: entry)
@@ -266,7 +266,7 @@ final class MixerEngine {
                 Diag.log("tap rebuild \(bundleID): [\(tap.processObjectIDs.map(String.init).joined(separator: ","))] -> [\(app.objectIDs.map(String.init).joined(separator: ","))] pending=true")
                 setMismatchSince[bundleID] = nil
                 installTap(for: app, entry: entry)
-            } else if tap.processObjectIDs != app.objectIDs {
+            } else if tap.processObjectIDs != app.tapObjectIDs {
                 let since = setMismatchSince[bundleID] ?? Date()
                 setMismatchSince[bundleID] = since
                 let stale = Date().timeIntervalSince(since)
@@ -283,7 +283,7 @@ final class MixerEngine {
         for (bundleID, entry) in volumes where !entry.isNeutral {
             // objectIDs empty = the app runs but has no Core Audio processes
             // yet; its saved volume applies when sound first appears.
-            guard taps[bundleID] == nil, let app = running[bundleID], !app.objectIDs.isEmpty else { continue }
+            guard taps[bundleID] == nil, let app = running[bundleID], !app.tapObjectIDs.isEmpty else { continue }
             installTap(for: app, entry: entry)
         }
     }
@@ -296,7 +296,7 @@ final class MixerEngine {
         do {
             let tap = try makeTap(for: app, entry: entry, replacing: old)
             taps[bundleID] = tap
-            Diag.log("tap ok \(bundleID) procs=\(app.objectIDs.count) vol=\(entry.volume) muted=\(entry.isMuted) held=\(tap.isHeld)")
+            Diag.log("tap ok \(bundleID) procs=\(app.tapObjectIDs.count) vol=\(entry.volume) muted=\(entry.isMuted) held=\(tap.isHeld)")
             if tap.isHeld {
                 rebuildPending.insert(bundleID)
                 scheduleTapRetry()

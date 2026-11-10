@@ -108,6 +108,9 @@ final class AudioProcessMonitor {
         struct Group {
             let app: NSRunningApplication
             var objects: [AudioObjectID] = []
+            /// Objects a process tap may safely intercept — orphan-rescued
+            /// vendor agents are excluded (see AudioApp.tapObjectIDs).
+            var tapEligible: [AudioObjectID] = []
             var playing = false
             var recording = false
         }
@@ -123,24 +126,33 @@ final class AudioProcessMonitor {
             // Helper processes answer to the app the user knows; a browser tab's
             // audio belongs to the browser. Helpers that launchd spawned with
             // no responsibility link (Talk's audio helper, resp == self) are
-            // matched by their executable path living inside an app bundle.
+            // matched by their executable path living inside an app bundle —
+            // but only for LISTING: such system agents are never tapped
+            // (muting works on them while capture returns nothing, which
+            // silences the app and wedges the helper).
             let ownerPID = Self.responsiblePID(for: pid)
-            guard let running = NSRunningApplication(processIdentifier: ownerPID)
-                ?? NSRunningApplication(processIdentifier: pid)
-                ?? Self.runningAppContainingProcess(pid)
-                ?? Self.runningAppNamedLikeProcess(pid),
-                let bundleID = running.bundleIdentifier,
-                bundleID != Bundle.main.bundleIdentifier
-            else {
+            var tapEligible = true
+            let running: NSRunningApplication
+            if let direct = NSRunningApplication(processIdentifier: ownerPID)
+                ?? NSRunningApplication(processIdentifier: pid) {
+                running = direct
+            } else if let rescued = Self.runningAppContainingProcess(pid)
+                ?? Self.runningAppNamedLikeProcess(pid) {
+                running = rescued
+                tapEligible = false
+            } else {
                 if objectID.readProcessIsRunningOutput() {
                     orphans.append("obj=\(objectID) pid=\(pid) resp=\(ownerPID) \(Self.processPath(pid))")
                 }
                 continue
             }
+            guard let bundleID = running.bundleIdentifier,
+                  bundleID != Bundle.main.bundleIdentifier else { continue }
 
             let key = running.processIdentifier
             var group = groups[key] ?? Group(app: running)
             group.objects.append(objectID)
+            if tapEligible { group.tapEligible.append(objectID) }
             group.playing = group.playing || objectID.readProcessIsRunningOutput()
             group.recording = group.recording || objectID.readProcessIsRunningInput()
             groups[key] = group
@@ -176,6 +188,7 @@ final class AudioProcessMonitor {
                 bundleID: group.app.bundleIdentifier ?? "",
                 name: group.app.localizedName ?? group.app.bundleIdentifier ?? "pid \(pid)",
                 objectIDs: group.objects.sorted(),
+                tapObjectIDs: group.tapEligible.sorted(),
                 isPlaying: group.playing,
                 isRecording: group.recording
             )

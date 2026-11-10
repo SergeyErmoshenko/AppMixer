@@ -5,7 +5,7 @@ extension MixerEngine {
     func makeTap(for app: AudioApp, entry: AppVolume, replacing old: ProcessTap?) throws -> ProcessTap {
         let outputs = try resolvedOutputs(for: entry)
         let tap = ProcessTap(
-            processObjectIDs: app.objectIDs,
+            processObjectIDs: app.tapObjectIDs,
             volume: entry.volume,
             isMuted: entry.isMuted
         )
