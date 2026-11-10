@@ -12,13 +12,17 @@ extension ProcessTap {
     /// "plays at 100% uncontrolled", never "silent". One shared lightweight
     /// watcher resumes IO as soon as the process runs again.
     @MainActor
-    func updatePlaybackState(isPlaying: Bool) {
-        guard isPlaying != isProcessPlaying else { return }
-        isProcessPlaying = isPlaying
+    func updatePlaybackState(isPlaying: Bool, audibleAgo: TimeInterval = .infinity) {
+        // Two independent activity signals: HAL's IsRunningOutput flag and
+        // actual samples rendered by this tap. Kontur Talk's helpers report
+        // idle mid-call; either signal saying "active" keeps the IO alive.
+        let active = isPlaying || audibleAgo < 120
+        guard active != isProcessPlaying else { return }
+        isProcessPlaying = active
         idleTask?.cancel()
         idleTask = nil
 
-        if isPlaying {
+        if active {
             if isSuspended { resumeIO() }
             return
         }

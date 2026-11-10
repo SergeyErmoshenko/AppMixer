@@ -40,10 +40,17 @@ final class MixerEngine {
     @ObservationIgnored private var neutralTeardownTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored var wakeResyncTask: Task<Void, Never>?
     @ObservationIgnored private var powerMonitor: AudioPowerMonitor?
-    /// Process-set changes must survive two syncs before a tap rebuild —
-    /// short-lived helper processes (notification beeps) flap every few
-    /// seconds, and every rebuild costs a permission prompt.
-    @ObservationIgnored private var setStability: [String: (ids: Set<AudioObjectID>, observations: Int)] = [:]
+    /// When each tap's process set last matched the app's live set. A tap
+    /// that keeps processes the app no longer uses mutes what it holds while
+    /// the app's current audio bypasses it — Kontur Talk re-registers its
+    /// audio objects every ~2 s, so "wait for the set to stabilize" never
+    /// fires and Talk sat silent. Instead: any mismatch older than
+    /// `mismatchRebuildAfter` rebuilds the tap onto the current set. The
+    /// stable signing identity made rebuilds prompt-free, so freshness now
+    /// wins over quiet; short flap bursts inside the window are still
+    /// absorbed.
+    @ObservationIgnored private var setMismatchSince: [String: Date] = [:]
+    private static let mismatchRebuildAfter: TimeInterval = 4
 
     func start() {
         volumes = store.load()
@@ -120,21 +127,6 @@ final class MixerEngine {
     }
 
     // MARK: - Private
-
-    /// A process-set change only triggers a rebuild once the new set has
-    /// survived three consecutive syncs (~6 s): notification-sound helpers
-    /// live 2–5 s and flapping sets never reach the threshold, while a real
-    /// new process (browser media child) settles and gets captured.
-    private func isStableSetChange(_ bundleID: String, _ ids: [AudioObjectID]) -> Bool {
-        let new = Set(ids)
-        guard let stored = setStability[bundleID], stored.ids == new else {
-            setStability[bundleID] = (new, 0)
-            return false
-        }
-        let observations = stored.observations + 1
-        setStability[bundleID] = (new, observations)
-        return observations >= 3
-    }
 
     func discardHALBoundState() {
         for tap in taps.values {
@@ -237,21 +229,26 @@ final class MixerEngine {
             }
             // A browser that spawns a new media child needs the tap rebuilt —
             // the old one keeps muting only the processes it was born with.
-            // But a broken tap replaces immediately; a mere process-set
-            // change waits for stability (see isStableSetChange).
+            // Broken taps replace immediately; a stale process set replaces
+            // once the mismatch outlives mismatchRebuildAfter (flapping apps
+            // never stabilize — see setMismatchSince) or the app is playing
+            // right now.
             if rebuildPending.contains(bundleID) {
                 Diag.log("tap rebuild \(bundleID): [\(tap.processObjectIDs.map(String.init).joined(separator: ","))] -> [\(app.objectIDs.map(String.init).joined(separator: ","))] pending=true")
-                setStability[bundleID] = nil
+                setMismatchSince[bundleID] = nil
                 installTap(for: app, entry: entry)
             } else if tap.processObjectIDs != app.objectIDs {
-                if isStableSetChange(bundleID, app.objectIDs) {
-                    Diag.log("tap rebuild \(bundleID): [\(tap.processObjectIDs.map(String.init).joined(separator: ","))] -> [\(app.objectIDs.map(String.init).joined(separator: ","))] stable")
-                    setStability[bundleID] = nil
+                let since = setMismatchSince[bundleID] ?? Date()
+                setMismatchSince[bundleID] = since
+                let stale = Date().timeIntervalSince(since)
+                if app.isPlaying || stale >= Self.mismatchRebuildAfter {
+                    Diag.log("tap rebuild \(bundleID): mismatch \(String(format: "%.1f", stale))s playing=\(app.isPlaying) [\(tap.processObjectIDs.map(String.init).joined(separator: ","))] -> [\(app.objectIDs.map(String.init).joined(separator: ","))]")
+                    setMismatchSince[bundleID] = nil
                     installTap(for: app, entry: entry)
                 }
             } else {
-                setStability[bundleID] = nil
-                tap.updatePlaybackState(isPlaying: app.isPlaying)
+                setMismatchSince[bundleID] = nil
+                tap.updatePlaybackState(isPlaying: app.isPlaying, audibleAgo: tap.secondsSinceAudibleRender)
             }
         }
         for (bundleID, entry) in volumes where !entry.isNeutral {

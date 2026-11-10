@@ -32,6 +32,12 @@ final class ProcessTap: @unchecked Sendable {
     /// Computed from the device sample rate in activate(); the render never
     /// runs before that, so the placeholder is inert.
     private nonisolated(unsafe) var _rampCoefficient: Float = 0
+    /// mach tick of the last render pass that produced a nonzero sample.
+    /// HAL's per-process IsRunningOutput flag lies for some apps (Electron
+    /// call helpers report idle mid-call); samples actually flowing through
+    /// this tap are ground truth for "the process is audible". Aligned
+    /// UInt64 load/store, read lock-free from the main actor.
+    private nonisolated(unsafe) var lastAudibleTick: UInt64 = 0
 
     var tapID = AudioObjectID.unknown
     var aggregateID = AudioObjectID.unknown
@@ -71,6 +77,19 @@ final class ProcessTap: @unchecked Sendable {
     var isMuted: Bool {
         get { _isMuted }
         set { _isMuted = newValue }
+    }
+
+    /// Seconds since this tap last rendered actual audio (infinity if never).
+    /// Feeds the idle-park decision so a lying IsRunningOutput flag can't
+    /// park a tap that is mid-call. Main-actor only.
+    @MainActor
+    var secondsSinceAudibleRender: TimeInterval {
+        guard lastAudibleTick != 0 else { return .infinity }
+        var base = mach_timebase_info_data_t()
+        mach_timebase_info(&base)
+        let elapsed = mach_absolute_time() - lastAudibleTick
+        let nanos = Double(elapsed) * Double(base.numer) / Double(base.denom)
+        return nanos / 1e9
     }
 
     init(processObjectIDs: [AudioObjectID], volume: Float = 1.0, isMuted: Bool = false) {
@@ -251,6 +270,15 @@ final class ProcessTap: @unchecked Sendable {
                                             count: Int(outBuffer.mDataByteSize) / MemoryLayout<Float>.size),
                 gain: TapMix.Gain(current: gain, target: targetGain, ramp: ramp)
             )
+            // Audibility probe: one linear scan for any nonzero sample.
+            // Cheap (a pass of float compares over ~512 samples) and the
+            // only reliable "process is audible" signal for apps whose HAL
+            // flags lie.
+            let samples = outData.assumingMemoryBound(to: Float.self)
+            let count = Int(outBuffer.mDataByteSize) / MemoryLayout<Float>.size
+            var i = 0
+            while i < count, samples[i] == 0 { i += 1 }
+            if i < count { lastAudibleTick = mach_absolute_time() }
         }
         _currentGain = gain
     }
