@@ -22,6 +22,8 @@ final class AudioProcessMonitor {
     /// Written only on the main actor; deinit reads it nonisolated, hence
     /// `nonisolated(unsafe)` — the same escape hatch ProcessTap uses.
     @ObservationIgnored nonisolated(unsafe) private var workspaceObservers: [NSObjectProtocol] = []
+    /// Last logged orphan set — dedupes the X-ray line between refreshes.
+    @ObservationIgnored private var lastPlayingOrphans: [String] = []
 
     func start() {
         guard pollTask == nil else { return } // idempotent: a second call must not double-listen
@@ -110,6 +112,10 @@ final class AudioProcessMonitor {
             var recording = false
         }
         var groups: [pid_t: Group] = [:]
+        // HAL objects whose audio plays but which no application claims —
+        // if an app's sound flows through one of these, no slider can ever
+        // reach it. Collected for the X-ray diag line below.
+        var orphans: [String] = []
 
         for objectID in objectIDs {
             guard let pid = try? objectID.readProcessPID() else { continue }
@@ -121,7 +127,12 @@ final class AudioProcessMonitor {
                 ?? NSRunningApplication(processIdentifier: pid),
                 let bundleID = running.bundleIdentifier,
                 bundleID != Bundle.main.bundleIdentifier
-            else { continue }
+            else {
+                if objectID.readProcessIsRunningOutput() {
+                    orphans.append("obj=\(objectID) pid=\(pid) resp=\(ownerPID) \(Self.processName(pid))")
+                }
+                continue
+            }
 
             let key = running.processIdentifier
             var group = groups[key] ?? Group(app: running)
@@ -129,6 +140,13 @@ final class AudioProcessMonitor {
             group.playing = group.playing || objectID.readProcessIsRunningOutput()
             group.recording = group.recording || objectID.readProcessIsRunningInput()
             groups[key] = group
+        }
+
+        if orphans != lastPlayingOrphans {
+            lastPlayingOrphans = orphans
+            if !orphans.isEmpty {
+                Diag.log("hal playing orphans (audio no app claims): \(orphans.joined(separator: " | "))")
+            }
         }
 
         // Every regular GUI app stays listed even before it makes sound, so
@@ -193,6 +211,13 @@ final class AudioProcessMonitor {
         else { return nil }
         return unsafeBitCast(symbol, to: ResponsiblePIDFunction.self)
     }()
+
+    /// Executable name of a pid for the orphan X-ray line (best effort).
+    private static func processName(_ pid: pid_t) -> String {
+        var path = [CChar](repeating: 0, count: 1024)
+        guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return "(unknown)" }
+        return String(cString: path).split(separator: "/").last.map(String.init) ?? "(unknown)"
+    }
 
     private static func responsiblePID(for pid: pid_t) -> pid_t {
         guard let function = responsiblePIDFunction else { return pid }
