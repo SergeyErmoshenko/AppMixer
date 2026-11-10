@@ -69,6 +69,29 @@ final class MixerEngine {
         powerMonitor?.start()
         syncTaps()
         isStarted = true
+        startTapHealthTelemetry()
+    }
+
+    /// Every 15 s, one line per live tap: is the interception delivering
+    /// audio (input), is our re-render audible (output), is the aggregate
+    /// alive. Distinguishes the three silence failure modes on a user's
+    /// machine without a debugger attached.
+    private func startTapHealthTelemetry() {
+        Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(15), tolerance: .seconds(2))
+                } catch {
+                    break
+                }
+                guard let self else { break }
+                for (bundleID, tap) in self.taps {
+                    let input = Int(tap.secondsSinceInputRender.rounded())
+                    let output = Int(tap.secondsSinceAudibleRender.rounded())
+                    Diag.log("tap health \(bundleID): input=\(input >= 999_999 ? "never" : "\(input)s") output=\(output >= 999_999 ? "never" : "\(output)s") suspended=\(tap.isSuspended) alive=\(tap.isAlive)")
+                }
+            }
+        }
     }
 
     func volume(for app: AudioApp) -> AppVolume {

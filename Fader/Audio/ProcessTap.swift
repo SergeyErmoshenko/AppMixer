@@ -38,6 +38,10 @@ final class ProcessTap: @unchecked Sendable {
     /// this tap are ground truth for "the process is audible". Aligned
     /// UInt64 load/store, read lock-free from the main actor.
     private nonisolated(unsafe) var lastAudibleTick: UInt64 = 0
+    /// mach tick of the last render pass whose INPUT (the tap's copy of the
+    /// process's audio) was nonzero — distinguishes "the tap delivers
+    /// silence" from "our re-render is broken" in the health telemetry.
+    private nonisolated(unsafe) var lastInputTick: UInt64 = 0
 
     var tapID = AudioObjectID.unknown
     var aggregateID = AudioObjectID.unknown
@@ -84,10 +88,21 @@ final class ProcessTap: @unchecked Sendable {
     /// park a tap that is mid-call. Main-actor only.
     @MainActor
     var secondsSinceAudibleRender: TimeInterval {
-        guard lastAudibleTick != 0 else { return .infinity }
+        Self.secondsSinceTick(lastAudibleTick)
+    }
+
+    /// Seconds since the tap last delivered nonzero input — the interception's
+    /// own heartbeat, independent of our render/mute state.
+    @MainActor
+    var secondsSinceInputRender: TimeInterval {
+        Self.secondsSinceTick(lastInputTick)
+    }
+
+    private static func secondsSinceTick(_ tick: UInt64) -> TimeInterval {
+        guard tick != 0 else { return .infinity }
         var base = mach_timebase_info_data_t()
         mach_timebase_info(&base)
-        let elapsed = mach_absolute_time() - lastAudibleTick
+        let elapsed = mach_absolute_time() - tick
         let nanos = Double(elapsed) * Double(base.numer) / Double(base.denom)
         return nanos / 1e9
     }
@@ -252,6 +267,18 @@ final class ProcessTap: @unchecked Sendable {
         let targetGain = VolumeTaper.gain(position: _volume)
         var gain = _currentGain
         let ramp = _rampCoefficient
+
+        // Input probe: the tap's copy of the process's audio, before gain.
+        // Input silent while the app plays = the interception itself delivers
+        // nothing (voice-processing helpers stall when tapped).
+        for buffer in inputs {
+            guard let data = buffer.mData else { continue }
+            let samples = data.assumingMemoryBound(to: Float.self)
+            let count = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            var i = 0
+            while i < count, samples[i] == 0 { i += 1 }
+            if i < count { lastInputTick = mach_absolute_time() }
+        }
 
         for (index, outBuffer) in outputs.enumerated() {
             guard let outData = outBuffer.mData else { continue }
