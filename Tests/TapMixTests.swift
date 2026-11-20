@@ -127,7 +127,7 @@ struct BoostSoftCeilingTests {
 
     @Test("samples the boost leaves below the knee pass through untouched")
     func belowKneeBitExact() {
-        // 0.4 × 2 = 0.8 < knee 0.85 — exactly the product, no ceiling.
+        // 0.4 × 2 = 0.8 < knee 0.95 — exactly the product, no ceiling.
         let result = mixed(input: [0.4, -0.4], inputChannels: 1, outputChannels: 1, outputCount: 2,
                            gain: 2, targetGain: 2)
 
@@ -148,13 +148,16 @@ struct BoostSoftCeilingTests {
 
     @Test("soft ceiling is monotonic: a louder boosted peak stays louder")
     func ceilingIsMonotonic() {
-        let knee: Float = 0.85
+        let knee: Float = 0.95
         var previous: Float = -1
         for step in 0 ... 30 {
             let x = -1 + Float(step) * 2 / 30
             let shaped = TapMix.softCeiling(x * 2) // boosted ×2
             #expect(shaped >= -1 && shaped <= 1)
-            #expect(shaped > previous)
+            // Non-strict: in Float the tanh saturates onto an exact-±1.0
+            // plateau well inside this sweep, so strict increase would test
+            // the plateau, not the curve.
+            #expect(shaped >= previous)
             previous = shaped
             // Below the knee the ceiling is the identity.
             if abs(x * 2) <= knee {

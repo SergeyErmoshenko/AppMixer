@@ -19,7 +19,7 @@ final class ProcessTap: @unchecked Sendable {
         try? AudioObjectID.system.write(kAudioHardwarePropertyHogModeIsAllowed, value: UInt32(0))
     }
 
-    /// Slider position, 0.0...2.0 (200% boost). Read by the RT thread every
+    /// Slider position, 0.0...3.0 (300% boost). Read by the RT thread every
     /// buffer and run through `taperedGain` before it reaches the samples —
     /// the stored value stays linear position so the UI and VolumeStore keep
     /// their 0...maxPosition semantics.
@@ -32,6 +32,12 @@ final class ProcessTap: @unchecked Sendable {
     /// Computed from the device sample rate in activate(); the render never
     /// runs before that, so the placeholder is inert.
     private nonisolated(unsafe) var _rampCoefficient: Float = 0
+    /// Look-ahead limiter for the boost region. Built in verifyStreamFormat
+    /// once the aggregate's rate and channel count are known — before the IO
+    /// proc exists, so the RT path only ever touches a fully-built ring. Nil
+    /// until then (or if a buffer pair's layout ever mismatches): the boost
+    /// falls back to the soft ceiling alone.
+    private nonisolated(unsafe) var _limiter: TapMix.Limiter?
     /// mach tick of the last render pass that produced a nonzero sample.
     /// HAL's per-process IsRunningOutput flag lies for some apps (Electron
     /// call helpers report idle mid-call); samples actually flowing through
@@ -208,6 +214,8 @@ final class ProcessTap: @unchecked Sendable {
             return false
         }
         _rampCoefficient = 1 - exp(-1 / (Float(format.mSampleRate) * 0.030))
+        _limiter = TapMix.Limiter(sampleRate: Float(format.mSampleRate),
+                                  channels: Int(format.mChannelsPerFrame))
         return true
     }
 
@@ -258,6 +266,8 @@ final class ProcessTap: @unchecked Sendable {
 
     private func render(_ input: UnsafePointer<AudioBufferList>, into output: UnsafeMutablePointer<AudioBufferList>) {
         if _isMuted {
+            // Keep the window cold so unmuting never replays pre-mute audio.
+            _limiter?.reset()
             Self.silence(output)
             return
         }
@@ -295,7 +305,8 @@ final class ProcessTap: @unchecked Sendable {
                 output: outData.assumingMemoryBound(to: Float.self),
                 outputLayout: TapMix.Layout(channels: Int(outBuffer.mNumberChannels),
                                             count: Int(outBuffer.mDataByteSize) / MemoryLayout<Float>.size),
-                gain: TapMix.Gain(current: gain, target: targetGain, ramp: ramp)
+                gain: TapMix.Gain(current: gain, target: targetGain, ramp: ramp),
+                limiter: _limiter
             )
             // Audibility probe: one linear scan for any nonzero sample.
             // Cheap (a pass of float compares over ~512 samples) and the
