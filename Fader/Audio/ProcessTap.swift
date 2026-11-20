@@ -19,7 +19,7 @@ final class ProcessTap: @unchecked Sendable {
         try? AudioObjectID.system.write(kAudioHardwarePropertyHogModeIsAllowed, value: UInt32(0))
     }
 
-    /// Slider position, 0.0...3.0 (300% boost). Read by the RT thread every
+    /// Slider position, 0.0...5.0 (500% boost). Read by the RT thread every
     /// buffer and run through `taperedGain` before it reaches the samples —
     /// the stored value stays linear position so the UI and VolumeStore keep
     /// their 0...maxPosition semantics.

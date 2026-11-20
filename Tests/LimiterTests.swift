@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 /// The look-ahead limiter behind the boost. It is what keeps loudness
-/// climbing between 120% and 300% instead of a per-sample saturator
+/// climbing once the slider passes ~120% instead of a per-sample saturator
 /// flattening everything against the ceiling.
 @Suite("boost: look-ahead limiter")
 struct LimiterTests {

@@ -12,7 +12,7 @@ struct VolumeTaperTests {
     @Test("clamps out-of-range positions")
     func clamps() {
         #expect(VolumeTaper.gain(position: -0.5) == 0)
-        #expect(VolumeTaper.gain(position: 3) == VolumeTaper.maxPosition)
+        #expect(VolumeTaper.gain(position: VolumeTaper.maxPosition + 1) == VolumeTaper.maxPosition)
     }
 
     @Test("midpoint sits well below linear −6 dB so the bottom of the travel breathes")

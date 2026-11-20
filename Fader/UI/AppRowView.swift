@@ -36,7 +36,8 @@ struct AppRowView: View {
                     set: { engine.setVolume($0, for: app) }
                 ),
                 maxValue: VolumeTaper.maxPosition,
-                marks: [0, 0.5, 1, 1.5, 2, 2.5, 3],
+                // Fine snapping below unity, 100%-steps above it.
+                marks: [0, 0.5, 1, 1.5, 2, 3, 4, 5],
                 icon: sliderIcon(entry),
                 iconDimmed: entry.isMuted,
                 onIconTap: { engine.toggleMute(for: app) }

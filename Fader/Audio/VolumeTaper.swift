@@ -8,13 +8,13 @@
 /// perceived-loudness change. Kept pure and free of HAL imports so it unit-tests
 /// in the hostless bundle.
 ///
-/// Above unity the slider keeps going to `maxPosition` (300%): the boost
-/// region is linear — gain equals position, so 150% is exactly +3.5 dB and
-/// 300% is +9.5 dB. Boosted peaks are held in check by TapMix's look-ahead
+/// Above unity the slider keeps going to `maxPosition` (500%): the boost
+/// region is linear — gain equals position, so 200% is exactly +6 dB and
+/// 500% is +14 dB. Boosted peaks are held in check by TapMix's look-ahead
 /// limiter; attenuation stays bit-exact.
 enum VolumeTaper {
-    /// The slider's top end: 300% of native volume (+9.5 dB).
-    static let maxPosition: Float = 3
+    /// The slider's top end: 500% of native volume (+14 dB).
+    static let maxPosition: Float = 5
 
     static func gain(position: Float) -> Float {
         let p = max(0, min(maxPosition, position))
